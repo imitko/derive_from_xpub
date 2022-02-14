@@ -97,6 +97,51 @@ static char * buf_bin2hex (unsigned char * buf, size_t buf_len, char * ret)
   return ret;
 }
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+size_t EC_POINT_point2buf(const EC_GROUP *group,
+                         const EC_POINT *point,
+                         point_conversion_form_t form, 
+                         unsigned char **pbuf,
+                         BN_CTX *ctx)
+{
+  unsigned char *buf;
+  size_t buf_len = 0;
+
+  buf_len = EC_POINT_point2oct(group, point, form, NULL, 0, ctx);
+  if (buf_len == 0)
+    return 0;
+
+  if ((buf = OPENSSL_malloc(buf_len)) == NULL)
+    return 0;
+
+  if (!EC_POINT_point2oct(group, point, form, buf, buf_len, ctx)) {
+    OPENSSL_free(buf);
+    return 0;
+  }
+  *pbuf = buf;
+  return buf_len;
+}
+
+HMAC_CTX *
+HMAC_CTX_new (void)
+{
+  HMAC_CTX *ctx = OPENSSL_malloc (sizeof (HMAC_CTX));
+  if (ctx != NULL)
+    HMAC_CTX_init (ctx);
+  return ctx;
+}
+
+
+void
+HMAC_CTX_free (HMAC_CTX * ctx)
+{
+  if (ctx != NULL)
+    {
+      HMAC_CTX_cleanup (ctx);
+      OPENSSL_free (ctx);
+    }
+}
+#endif 
 
 static int
 bip32_parse_dir (uint32_t *indexes, size_t indexes_len, char * dir_str)
@@ -115,6 +160,7 @@ bip32_parse_dir (uint32_t *indexes, size_t indexes_len, char * dir_str)
         }
       tok = strtok_r (NULL, "/", &tok_s);
     }
+  free (string);
   return lvl;
 }
 
@@ -130,7 +176,7 @@ main (int argc, char ** argv)
   unsigned char hmac_value[EVP_MAX_MD_SIZE];
   uint32_t hmac_len, Ki_len, indexes[256];
   uint32_t index;
-  unsigned char *pub, *chain, *Ki_pub = NULL, *Ki_chain;
+  unsigned char *pub = NULL, *chain, *Ki_pub = NULL, *Ki_chain;
   int rc, lvl = 0, depth;
   char *xpub_str, *path = "m/0/0";
 
@@ -207,8 +253,8 @@ main (int argc, char ** argv)
       BN_free (m);
       BN_free (bn);
     }
-  if (Ki_pub)
-    OPENSSL_free (Ki_pub);
+  if (pub)
+    OPENSSL_free (pub);
   done_secp256k1();
   return 0;
 }
