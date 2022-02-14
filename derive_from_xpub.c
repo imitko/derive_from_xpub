@@ -8,6 +8,9 @@
 #include <openssl/hmac.h>
 #include <openssl/err.h>
 #include <libbase58.h>
+#ifdef BIP84
+#include "segwit_addr.h"
+#endif
 
 
 #ifndef NDEBUG
@@ -52,7 +55,7 @@ static BIGNUM *n, *g_x;
 static EC_POINT *g_point;
 static EC_GROUP *secp256k1_group;
 
-static void 
+static void
 init_secp256k1 ()
 {
   int rc;
@@ -87,7 +90,7 @@ static char * buf_bin2hex (unsigned char * buf, size_t buf_len, char * ret)
   char *p = ret;
   unsigned char *pbuf = buf;
   int i;
-  for (i = buf_len; i > 0; i--) 
+  for (i = buf_len; i > 0; i--)
     {
       int v = (int)*(pbuf++);
       *(p++) = HEX_DIGITS[v >> 4];
@@ -100,7 +103,7 @@ static char * buf_bin2hex (unsigned char * buf, size_t buf_len, char * ret)
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
 size_t EC_POINT_point2buf(const EC_GROUP *group,
                          const EC_POINT *point,
-                         point_conversion_form_t form, 
+                         point_conversion_form_t form,
                          unsigned char **pbuf,
                          BN_CTX *ctx)
 {
@@ -141,7 +144,48 @@ HMAC_CTX_free (HMAC_CTX * ctx)
       OPENSSL_free (ctx);
     }
 }
-#endif 
+
+EVP_MD_CTX *EVP_MD_CTX_new(void)
+{
+  EVP_MD_CTX *ctx = (EVP_MD_CTX *) OPENSSL_malloc (sizeof (EVP_MD_CTX));
+  if (NULL != ctx)
+    memset (ctx, 0, sizeof (EVP_MD_CTX));
+  return ctx;
+}
+
+void EVP_MD_CTX_free(EVP_MD_CTX *ctx)
+{
+  EVP_MD_CTX_cleanup (ctx);
+  OPENSSL_free(ctx);
+}
+#endif
+
+static unsigned char *
+hash160 (unsigned char *pub, int pub_len, int * script_len)
+{
+  unsigned char hash_value[EVP_MAX_MD_SIZE];
+  unsigned char sha_value[EVP_MAX_MD_SIZE];
+  unsigned char * hash;
+  EVP_MD_CTX * ctx;
+  int sha_len, hash_len, rc;
+
+  ctx = EVP_MD_CTX_new ();
+  CKRC(EVP_DigestInit_ex (ctx, EVP_sha256(), NULL));
+  CKRC(EVP_DigestUpdate (ctx, pub, pub_len));
+  CKRC(EVP_DigestFinal_ex (ctx, sha_value, &sha_len));
+  EVP_MD_CTX_free (ctx);
+
+  ctx = EVP_MD_CTX_new ();
+  CKRC(EVP_DigestInit_ex (ctx, EVP_ripemd160(), NULL));
+  CKRC(EVP_DigestUpdate (ctx, sha_value, sha_len));
+  CKRC(EVP_DigestFinal_ex (ctx, hash_value, &hash_len));
+  EVP_MD_CTX_free (ctx);
+
+  hash = malloc (hash_len);
+  memcpy (hash, hash_value, hash_len);
+  *script_len = hash_len;
+  return hash;
+}
 
 static int
 bip32_parse_dir (uint32_t *indexes, size_t indexes_len, char * dir_str)
@@ -153,7 +197,7 @@ bip32_parse_dir (uint32_t *indexes, size_t indexes_len, char * dir_str)
     {
       if (tok[0] != 'm')
         {
-          i = atoi (tok); 
+          i = atoi (tok);
           indexes[lvl] = i;
           lvl ++;
           ASSERT (lvl < indexes_len);
@@ -164,7 +208,7 @@ bip32_parse_dir (uint32_t *indexes, size_t indexes_len, char * dir_str)
   return lvl;
 }
 
-int 
+int
 main (int argc, char ** argv)
 {
   HMAC_CTX *hmac_ctx;
@@ -180,7 +224,7 @@ main (int argc, char ** argv)
   int rc, lvl = 0, depth;
   char *xpub_str, *path = "m/0/0";
 
-  if (argc < 2) 
+  if (argc < 2)
     {
       printf ("Usage: derive_from_xpub [xpub] [path]\n");
       return -1;
@@ -246,6 +290,17 @@ main (int argc, char ** argv)
                 fprintf (stdout, "***FAILED");
               fprintf (stdout, ": BIP-84 Account 0, first receiving address = m/84'/0'/0'/0/0\n");
             }
+#ifdef BIP84
+            {
+              char addr[93];
+              int script_len;
+              unsigned char * script;
+              script = hash160 (pub, PUB_SZ, &script_len);
+              segwit_addr_encode (addr, "bc", 0, script, script_len);
+              OPENSSL_free (script);
+              fprintf (stdout, "Address: %s\n", addr);
+            }
+#endif
           OPENSSL_free (hex);
         }
       EC_POINT_free (xpub_point);
