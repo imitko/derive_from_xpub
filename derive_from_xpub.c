@@ -161,13 +161,13 @@ void EVP_MD_CTX_free(EVP_MD_CTX *ctx)
 #endif
 
 static unsigned char *
-hash160 (unsigned char *pub, int pub_len, int * script_len)
+hash160 (unsigned char *pub, int pub_len, unsigned int * script_len)
 {
   unsigned char hash_value[EVP_MAX_MD_SIZE];
   unsigned char sha_value[EVP_MAX_MD_SIZE];
   unsigned char * hash;
   EVP_MD_CTX * ctx;
-  int sha_len, hash_len, rc;
+  unsigned int sha_len, hash_len, rc;
 
   ctx = EVP_MD_CTX_new ();
   CKRC(EVP_DigestInit_ex (ctx, EVP_sha256(), NULL));
@@ -293,7 +293,7 @@ main (int argc, char ** argv)
 #ifdef BIP84
             {
               char addr[93];
-              int script_len;
+              unsigned int script_len;
               unsigned char * script;
               script = hash160 (pub, PUB_SZ, &script_len);
               segwit_addr_encode (addr, "bc", 0, script, script_len);
