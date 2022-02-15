@@ -214,7 +214,7 @@ main (int argc, char ** argv)
 {
   HMAC_CTX *hmac_ctx;
   EC_POINT *xpub_point;
-  EC_POINT *Ki_point;
+  EC_POINT *Ki_point = NULL;
   BIGNUM *m, *bn, *priv_int;
   unsigned char decoded[512], *xpub_decoded;;
   size_t xpub_buf_len, xpub_len;
