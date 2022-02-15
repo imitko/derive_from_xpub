@@ -303,6 +303,7 @@ main (int argc, char ** argv)
           CKRC( BN_add (key_int, key_int, offset) );
           CKRC( BN_mod (priv_int, key_int, n, ctx) );
           K_len = BN_bn2bin (priv_int, K_priv + 1);
+          BN_free (priv_int);
           BN_CTX_free (ctx);
           K_priv[0] = '\x0';
           key_bin = K_priv;
