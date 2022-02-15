@@ -80,6 +80,7 @@ done_secp256k1 ()
 #define CHAIN_SZ        32
 #define KEY_SZ          33
 #define KEY_OFFSET      (CHAIN_OFFSET + CHAIN_SZ)
+#define ZKEY_SZ         CHAIN_OFFSET + CHAIN_SZ + KEY_SZ
 
 static char * xpub_str_test = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs";
 static char * xpriv_str_test = "zprvAdG4iTXWBoARxkkzNpNh8r6Qag3irQB8PzEMkAFeTRXxHpbF9z4QgEvBRmfvqWvGp42t42nvgGpNgYSJA9iefm1yYNZKEm7z6qUWCroSQnE";
@@ -187,8 +188,9 @@ compress_key (unsigned char *key, unsigned int * buf_len)
   CKRC(EVP_DigestFinal_ex (ctx, sha, &len));
   EVP_MD_CTX_free (ctx);
   memcpy(key_value+KEY_SZ+1, sha, 4);
-  s = malloc (sizeof (key_value) * 2);
-  b58enc(s, &b58_len, key_value, sizeof (key_value));
+  b58_len = sizeof (key_value) * 2;
+  s = malloc (b58_len);
+  rc = b58enc(s, &b58_len, &key_value[0], sizeof (key_value));
   s[b58_len] = '\0';
   *buf_len = b58_len;
   return s;
@@ -291,6 +293,7 @@ main (int argc, char ** argv)
   rc = b58tobin (decoded, &xpub_len, xkey_str, 0);
   ASSERT (rc == true);
   ASSERT (xpub_len <= xpub_buf_len);
+  ASSERT (xpub_len >= ZKEY_SZ);
   xpub_decoded = &decoded[xpub_buf_len - xpub_len];
 
   key_bin = &xpub_decoded[KEY_OFFSET];
@@ -389,7 +392,6 @@ main (int argc, char ** argv)
               unsigned int wif_key_len;
               char * wif_key = compress_key (key_bin, &wif_key_len);
               fprintf (stdout, "Key: %s\n", wif_key);
-              free (wif_key);
               if (xkey_str == xpriv_str_test)
                 {
                   if (!strcasecmp (wif_key, "KyZpNDKnfs94vbrwhJneDi77V6jF64PWPF8x5cdJb8ifgg2DUc9d"))
@@ -398,6 +400,7 @@ main (int argc, char ** argv)
                     fprintf (stdout, "***FAILED");
                   fprintf (stdout, ": BIP-84 WIF key 0, for first receiving address = m/84'/0'/0'/0/0\n");
                 }
+              free (wif_key);
             }
 #endif
           OPENSSL_free (hex);
