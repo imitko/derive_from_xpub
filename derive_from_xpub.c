@@ -78,8 +78,8 @@ done_secp256k1 ()
 
 #define CHAIN_OFFSET    (4 + 1 + 4 + 4)
 #define CHAIN_SZ        32
-#define PUB_SZ          33
-#define PUB_OFFSET      (CHAIN_OFFSET + CHAIN_SZ)
+#define KEY_SZ          33
+#define KEY_OFFSET      (CHAIN_OFFSET + CHAIN_SZ)
 
 static char * xpub_str_test = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs";
 static char * xpriv_str_test = "zprvAdG4iTXWBoARxkkzNpNh8r6Qag3irQB8PzEMkAFeTRXxHpbF9z4QgEvBRmfvqWvGp42t42nvgGpNgYSJA9iefm1yYNZKEm7z6qUWCroSQnE";
@@ -161,6 +161,39 @@ void EVP_MD_CTX_free(EVP_MD_CTX *ctx)
 }
 #endif
 
+static char *
+compress_key (unsigned char *key, unsigned int * buf_len)
+{
+  unsigned char key_value[KEY_SZ + 5];
+  unsigned char sha0[EVP_MAX_MD_SIZE];
+  unsigned char sha[EVP_MAX_MD_SIZE];
+  unsigned int len, rc;
+  size_t b58_len;
+  char * s;
+  EVP_MD_CTX * ctx;
+
+  memcpy (key_value, key, KEY_SZ);
+  key_value[0] = '\x80';
+  key_value[KEY_SZ] = '\x01';
+
+  ctx = EVP_MD_CTX_new ();
+  CKRC(EVP_DigestInit_ex (ctx, EVP_sha256(), NULL));
+  CKRC(EVP_DigestUpdate (ctx, key_value, KEY_SZ + 1));
+  CKRC(EVP_DigestFinal_ex (ctx, sha0, &len));
+  EVP_MD_CTX_free (ctx);
+  ctx = EVP_MD_CTX_new ();
+  CKRC(EVP_DigestInit_ex (ctx, EVP_sha256(), NULL));
+  CKRC(EVP_DigestUpdate (ctx, sha0, len));
+  CKRC(EVP_DigestFinal_ex (ctx, sha, &len));
+  EVP_MD_CTX_free (ctx);
+  memcpy(key_value+KEY_SZ+1, sha, 4);
+  s = malloc (sizeof (key_value) * 2);
+  b58enc(s, &b58_len, key_value, sizeof (key_value));
+  s[b58_len] = '\0';
+  *buf_len = b58_len;
+  return s;
+}
+
 static unsigned char *
 hash160 (unsigned char *pub, int pub_len, unsigned int * script_len)
 {
@@ -228,14 +261,14 @@ main (int argc, char ** argv)
 
   if (argc < 2)
     {
-      printf ("Usage: derive_from_xpub [xpub/xpriv] [path m/0/0]\n");
+      printf ("Usage: derive_from_xpub [xpub/xprv] [path m/0/0]\n");
       return -1;
     }
   if (!strcmp(argv[1], "xpub"))
     {
       xkey_str = xpub_str_test;
     }
-  else if (!strcmp(argv[1], "xpriv"))
+  else if (!strcmp(argv[1], "xprv"))
     {
       xkey_str = xpriv_str_test;
       xpriv = 1;
@@ -243,7 +276,7 @@ main (int argc, char ** argv)
   else
     {
       xkey_str = argv[1];
-      if (strlen (xkey_str) > 4 && strncmp (xkey_str, "pub", 3))
+      if (strlen (xkey_str) > 4 && strncmp (xkey_str+1, "pub", 3))
         xpriv = 1;
     }
   if (argc > 2)
@@ -260,13 +293,13 @@ main (int argc, char ** argv)
   ASSERT (xpub_len <= xpub_buf_len);
   xpub_decoded = &decoded[xpub_buf_len - xpub_len];
 
-  key_bin = &xpub_decoded[PUB_OFFSET];
+  key_bin = &xpub_decoded[KEY_OFFSET];
   chain = &xpub_decoded[CHAIN_OFFSET];
   for (lvl = 0; lvl < depth; lvl ++)
     {
       INT32_SET_BE(index, indexes[lvl]);
       // int_key
-      key_int = BN_bin2bn (key_bin, PUB_SZ, 0);
+      key_int = BN_bin2bn (key_bin, KEY_SZ, 0);
       CK(key_int);
       if (xpriv)
         {
@@ -288,7 +321,7 @@ main (int argc, char ** argv)
 
       hmac_ctx = HMAC_CTX_new();
       CKRC( HMAC_Init_ex (hmac_ctx, (void*) chain, CHAIN_SZ, EVP_sha512(), NULL));
-      CKRC( HMAC_Update (hmac_ctx, (void*) key_bin, PUB_SZ) );
+      CKRC( HMAC_Update (hmac_ctx, (void*) key_bin, KEY_SZ) );
       CKRC( HMAC_Update (hmac_ctx, (void*) &index, sizeof (uint32_t)) );
       CKRC( HMAC_Final (hmac_ctx, hmac_value, &hmac_len) );
       HMAC_CTX_free (hmac_ctx);
@@ -318,7 +351,7 @@ main (int argc, char ** argv)
           if (Ki_pub)
             OPENSSL_free (Ki_pub);
           Ki_len = EC_POINT_point2buf(secp256k1_group, Ki_point, POINT_CONVERSION_COMPRESSED, &Ki_pub, 0);
-          ASSERT (Ki_len == PUB_SZ);
+          ASSERT (Ki_len == KEY_SZ);
           key_bin = Ki_pub;
         }
       chain = Ki_chain;
@@ -327,7 +360,7 @@ main (int argc, char ** argv)
           char chain_buf[CHAIN_SZ+1];
           char * hex = NULL, *khex;
           if (xpriv)
-            khex = buf_bin2hex (K_priv, PUB_SZ, &chain_buf[0]);
+            khex = buf_bin2hex (K_priv, KEY_SZ, &chain_buf[0]);
           else
             hex = EC_POINT_point2hex (secp256k1_group, Ki_point, POINT_CONVERSION_COMPRESSED, 0);
           fprintf (stdout, "Ki = %s\n", xpriv ? khex : hex);
@@ -346,10 +379,25 @@ main (int argc, char ** argv)
               char addr[93];
               unsigned int script_len;
               unsigned char * script;
-              script = hash160 (key_bin, PUB_SZ, &script_len);
+              script = hash160 (key_bin, KEY_SZ, &script_len);
               segwit_addr_encode (addr, "bc", 0, script, script_len);
               OPENSSL_free (script);
               fprintf (stdout, "Address: %s\n", addr);
+            }
+          else
+            {
+              unsigned int wif_key_len;
+              char * wif_key = compress_key (key_bin, &wif_key_len);
+              fprintf (stdout, "Key: %s\n", wif_key);
+              free (wif_key);
+              if (xkey_str == xpriv_str_test)
+                {
+                  if (!strcasecmp (wif_key, "KyZpNDKnfs94vbrwhJneDi77V6jF64PWPF8x5cdJb8ifgg2DUc9d"))
+                    fprintf (stdout, "PASSED");
+                  else
+                    fprintf (stdout, "***FAILED");
+                  fprintf (stdout, ": BIP-84 WIF key 0, for first receiving address = m/84'/0'/0'/0/0\n");
+                }
             }
 #endif
           OPENSSL_free (hex);
