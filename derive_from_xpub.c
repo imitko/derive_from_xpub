@@ -214,18 +214,17 @@ main (int argc, char ** argv)
 {
   HMAC_CTX *hmac_ctx;
   EC_POINT *xpub_point;
-  EC_POINT *Ki_point = NULL;
-  BIGNUM *m, *bn, *priv_int;
+  EC_POINT *Ki_point = NULL, *Q_point = NULL;
+  BIGNUM *offset, *key_int, *priv_int;
   unsigned char decoded[512], *xpub_decoded;;
   size_t xpub_buf_len, xpub_len;
   unsigned char hmac_value[EVP_MAX_MD_SIZE];
   uint32_t hmac_len, Ki_len, K_len, indexes[256];
   uint32_t index;
-  unsigned char *pub = NULL, *chain, *Ki_pub = NULL, *K_priv = NULL, *Ki_chain;
+  unsigned char *key_bin = NULL, *chain, *Ki_pub = NULL, *K_priv = NULL, *Ki_chain;
   int rc, lvl = 0, depth;
-  char *xpub_str, *path = "m/0/0";
+  char *xkey_str, *path = "m/0/0";
   int xpriv = 0;
-  EC_POINT * Q_point = NULL;
 
   if (argc < 2)
     {
@@ -234,17 +233,17 @@ main (int argc, char ** argv)
     }
   if (!strcmp(argv[1], "xpub"))
     {
-      xpub_str = xpub_str_test;
+      xkey_str = xpub_str_test;
     }
   else if (!strcmp(argv[1], "xpriv"))
     {
-      xpub_str = xpriv_str_test;
+      xkey_str = xpriv_str_test;
       xpriv = 1;
     }
   else
     {
-      xpub_str = argv[1];
-      if (strlen (xpub_str) > 4 && strncmp (xpub_str, "pub", 3))
+      xkey_str = argv[1];
+      if (strlen (xkey_str) > 4 && strncmp (xkey_str, "pub", 3))
         xpriv = 1;
     }
   if (argc > 2)
@@ -256,72 +255,70 @@ main (int argc, char ** argv)
   depth = bip32_parse_dir (indexes, sizeof (indexes), path);
 
   xpub_buf_len = xpub_len = sizeof (decoded);
-  rc = b58tobin (decoded, &xpub_len, xpub_str, 0);
+  rc = b58tobin (decoded, &xpub_len, xkey_str, 0);
   ASSERT (rc == true);
   ASSERT (xpub_len <= xpub_buf_len);
   xpub_decoded = &decoded[xpub_buf_len - xpub_len];
 
-  pub = &xpub_decoded[PUB_OFFSET];
+  key_bin = &xpub_decoded[PUB_OFFSET];
   chain = &xpub_decoded[CHAIN_OFFSET];
   for (lvl = 0; lvl < depth; lvl ++)
     {
       INT32_SET_BE(index, indexes[lvl]);
       // int_key
-      bn = BN_bin2bn (pub, PUB_SZ, 0);
-      CK(bn);
+      key_int = BN_bin2bn (key_bin, PUB_SZ, 0);
+      CK(key_int);
       if (xpriv)
         {
           Q_point = EC_POINT_new (secp256k1_group);
           CK(Q_point);
-          CKRC( EC_POINT_mul (secp256k1_group, Q_point, n, g_point, bn, 0) );
+          CKRC( EC_POINT_mul (secp256k1_group, Q_point, n, g_point, key_int, 0) );
           CKRC( EC_POINT_make_affine (secp256k1_group, Q_point, NULL) );
           if (K_priv)
             OPENSSL_free (K_priv);
           K_len = EC_POINT_point2buf(secp256k1_group, Q_point, POINT_CONVERSION_COMPRESSED, &K_priv, 0);
           EC_POINT_free (Q_point);
-          pub = K_priv;
+          key_bin = K_priv;
         }
       else
         {
-          xpub_point = EC_POINT_bn2point (secp256k1_group, bn, 0, 0);
+          xpub_point = EC_POINT_bn2point (secp256k1_group, key_int, 0, 0);
           CK(xpub_point);
         }
 
       hmac_ctx = HMAC_CTX_new();
       CKRC( HMAC_Init_ex (hmac_ctx, (void*) chain, CHAIN_SZ, EVP_sha512(), NULL));
-      CKRC( HMAC_Update (hmac_ctx, (void*) pub, PUB_SZ) );
+      CKRC( HMAC_Update (hmac_ctx, (void*) key_bin, PUB_SZ) );
       CKRC( HMAC_Update (hmac_ctx, (void*) &index, sizeof (uint32_t)) );
       CKRC( HMAC_Final (hmac_ctx, hmac_value, &hmac_len) );
       HMAC_CTX_free (hmac_ctx);
 
       Ki_chain = &hmac_value[hmac_len/2];
-      // for xpriv is offset
-      m = BN_bin2bn(&hmac_value[0], hmac_len/2, 0);
-      CK(m);
+      offset = BN_bin2bn(&hmac_value[0], hmac_len/2, 0);
+      CK(offset);
       if (xpriv)
         {
-          BN_CTX * ctx;
-          ctx = BN_CTX_new();
+          BN_CTX * ctx = BN_CTX_new();
           priv_int = BN_new ();
-          CKRC( BN_add (bn, bn, m) );
-          CKRC( BN_mod (priv_int, bn, n, ctx) );
+          CKRC( BN_add (key_int, key_int, offset) );
+          CKRC( BN_mod (priv_int, key_int, n, ctx) );
           K_len = BN_bn2bin (priv_int, K_priv + 1);
           BN_CTX_free (ctx);
           K_priv[0] = '\x0';
-          pub = K_priv;
+          key_bin = K_priv;
         }
       else
         {
           Ki_point = EC_POINT_new (secp256k1_group);
           CK(Ki_point);
-          CKRC ( EC_POINT_mul (secp256k1_group, Ki_point, n, g_point, m, 0) );
+          CKRC ( EC_POINT_mul (secp256k1_group, Ki_point, n, g_point, offset, 0) );
           CKRC( EC_POINT_make_affine (secp256k1_group, xpub_point, NULL) );
           CKRC( EC_POINT_add (secp256k1_group, Ki_point, Ki_point, xpub_point, NULL) );
           if (Ki_pub)
             OPENSSL_free (Ki_pub);
           Ki_len = EC_POINT_point2buf(secp256k1_group, Ki_point, POINT_CONVERSION_COMPRESSED, &Ki_pub, 0);
           ASSERT (Ki_len == PUB_SZ);
-          pub = Ki_pub;
+          key_bin = Ki_pub;
         }
       chain = Ki_chain;
       if (lvl == (depth - 1))
@@ -334,7 +331,7 @@ main (int argc, char ** argv)
             hex = EC_POINT_point2hex (secp256k1_group, Ki_point, POINT_CONVERSION_COMPRESSED, 0);
           fprintf (stdout, "Ki = %s\n", xpriv ? khex : hex);
           fprintf (stderr, "Ci = %s\n", buf_bin2hex (Ki_chain, CHAIN_SZ, &chain_buf[0]));
-          if (xpub_str == xpub_str_test)
+          if (xkey_str == xpub_str_test)
             {
               if (!strcasecmp (hex, "0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c"))
                 fprintf (stdout, "PASSED");
@@ -348,7 +345,7 @@ main (int argc, char ** argv)
               char addr[93];
               unsigned int script_len;
               unsigned char * script;
-              script = hash160 (pub, PUB_SZ, &script_len);
+              script = hash160 (key_bin, PUB_SZ, &script_len);
               segwit_addr_encode (addr, "bc", 0, script, script_len);
               OPENSSL_free (script);
               fprintf (stdout, "Address: %s\n", addr);
@@ -358,11 +355,11 @@ main (int argc, char ** argv)
         }
       EC_POINT_free (xpub_point);
       EC_POINT_free (Ki_point);
-      BN_free (m);
-      BN_free (bn);
+      BN_free (offset);
+      BN_free (key_int);
     }
-  if (pub)
-    OPENSSL_free (pub);
+  if (key_bin)
+    OPENSSL_free (key_bin);
   done_secp256k1();
   return 0;
 }
