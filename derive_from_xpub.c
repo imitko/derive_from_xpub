@@ -344,8 +344,6 @@ main (int argc, char ** argv)
         }
       else
         {
-          if (xpub_point)
-            EC_POINT_free (xpub_point);
           xpub_point = EC_POINT_bn2point (secp256k1_group, key_int, 0, 0);
           CK(xpub_point);
           bip32_make_fingerprint (parent_fingerprint, sizeof (parent_fingerprint), key_bin, KEY_SZ);
