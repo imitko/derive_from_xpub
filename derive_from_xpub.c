@@ -75,8 +75,10 @@ done_secp256k1 ()
   EC_GROUP_free (secp256k1_group);
 }
 
-
-#define CHAIN_OFFSET    (4 + 1 + 4 + 4)
+#define VERSION_OFFSET  4
+#define FP_OFFSET       5
+#define INDEX_OFFSET    9
+#define CHAIN_OFFSET    13
 #define CHAIN_SZ        32
 #define KEY_SZ          33
 #define KEY_OFFSET      (CHAIN_OFFSET + CHAIN_SZ)
@@ -162,24 +164,19 @@ void EVP_MD_CTX_free(EVP_MD_CTX *ctx)
 }
 #endif
 
-static char *
-compress_key (unsigned char *key, unsigned int * buf_len)
+static void
+checksum (unsigned char *buf, int buf_len, unsigned char *data, unsigned int data_len)
 {
-  unsigned char key_value[KEY_SZ + 5];
   unsigned char sha0[EVP_MAX_MD_SIZE];
   unsigned char sha[EVP_MAX_MD_SIZE];
   unsigned int len, rc;
-  size_t b58_len;
-  char * s;
   EVP_MD_CTX * ctx;
 
-  memcpy (key_value, key, KEY_SZ);
-  key_value[0] = '\x80';
-  key_value[KEY_SZ] = '\x01';
-
+  ASSERT (buf_len < EVP_MAX_MD_SIZE);
+  ASSERT (buf != NULL && data != NULL);
   ctx = EVP_MD_CTX_new ();
   CKRC(EVP_DigestInit_ex (ctx, EVP_sha256(), NULL));
-  CKRC(EVP_DigestUpdate (ctx, key_value, KEY_SZ + 1));
+  CKRC(EVP_DigestUpdate (ctx, data, data_len));
   CKRC(EVP_DigestFinal_ex (ctx, sha0, &len));
   EVP_MD_CTX_free (ctx);
   ctx = EVP_MD_CTX_new ();
@@ -187,7 +184,20 @@ compress_key (unsigned char *key, unsigned int * buf_len)
   CKRC(EVP_DigestUpdate (ctx, sha0, len));
   CKRC(EVP_DigestFinal_ex (ctx, sha, &len));
   EVP_MD_CTX_free (ctx);
-  memcpy(key_value+KEY_SZ+1, sha, 4);
+  memcpy(buf, sha, buf_len);
+}
+
+static char *
+compress_key (unsigned char *key, unsigned int * buf_len)
+{
+  unsigned char key_value[KEY_SZ + 5];
+  unsigned int len, rc;
+  size_t b58_len;
+  char * s;
+  memcpy (key_value, key, KEY_SZ);
+  key_value[0] = '\x80';
+  key_value[KEY_SZ] = '\x01';
+  checksum (key_value+KEY_SZ+1, sizeof (uint32_t), key_value, KEY_SZ + 1);
   b58_len = sizeof (key_value) * 2;
   s = malloc (b58_len);
   rc = b58enc(s, &b58_len, &key_value[0], sizeof (key_value));
@@ -223,6 +233,16 @@ hash160 (unsigned char *pub, int pub_len, unsigned int * script_len)
   return hash;
 }
 
+static void 
+bip32_make_fingerprint (unsigned char *buf, int buf_len, unsigned char * data, int data_len)
+{
+  unsigned int hash_len;
+  unsigned char * hash;
+  hash = hash160 (data, data_len, &hash_len);
+  memcpy (buf, hash, buf_len);
+  free (hash);
+}
+
 static int
 bip32_parse_dir (uint32_t *indexes, size_t indexes_len, char * dir_str)
 {
@@ -250,18 +270,18 @@ int
 main (int argc, char ** argv)
 {
   HMAC_CTX *hmac_ctx;
-  EC_POINT *xpub_point;
+  EC_POINT *xpub_point = NULL;
   EC_POINT *Ki_point = NULL, *Q_point = NULL;
   BIGNUM *offset, *key_int, *priv_int;
   unsigned char decoded[512], *xpub_decoded;;
   size_t xpub_buf_len, xpub_len;
-  unsigned char hmac_value[EVP_MAX_MD_SIZE];
+  unsigned char hmac_value[EVP_MAX_MD_SIZE], parent_fingerprint[4];
   uint32_t hmac_len, Ki_len, K_len, indexes[256];
   uint32_t index;
   unsigned char *key_bin = NULL, *chain, *Ki_pub = NULL, *K_priv = NULL, *Ki_chain;
   int rc, lvl = 0, depth;
   char *xkey_str, *path = "m/0/0";
-  int xpriv = 0;
+  int xpriv = 0, format = 0 /* 0:xkey, 1:wif */;
 
   if (argc < 2)
     {
@@ -285,6 +305,8 @@ main (int argc, char ** argv)
     }
   if (argc > 2)
     path = argv[2];
+  if (argc > 3 && !strcmp (argv[3], "-wif"))
+    format = 1;
 
   /* TODO: check input string length, prefixe etc.*/
 
@@ -306,9 +328,7 @@ main (int argc, char ** argv)
       // int_key
       key_int = BN_bin2bn (key_bin, KEY_SZ, 0);
       CK(key_int);
-      if (xpriv && indexes[lvl] > 0x7fffffff)
-        K_priv = OPENSSL_malloc(KEY_SZ);
-      else if (xpriv)
+      if (xpriv)
         {
           Q_point = EC_POINT_new (secp256k1_group);
           CK(Q_point);
@@ -318,12 +338,17 @@ main (int argc, char ** argv)
             OPENSSL_free (K_priv);
           K_len = EC_POINT_point2buf(secp256k1_group, Q_point, POINT_CONVERSION_COMPRESSED, &K_priv, 0);
           EC_POINT_free (Q_point);
-          key_bin = K_priv;
+          bip32_make_fingerprint (parent_fingerprint, sizeof (parent_fingerprint), K_priv, K_len);
+          if (indexes[lvl] < 0x80000000)
+            key_bin = K_priv;
         }
       else
         {
+          if (xpub_point)
+            EC_POINT_free (xpub_point);
           xpub_point = EC_POINT_bn2point (secp256k1_group, key_int, 0, 0);
           CK(xpub_point);
+          bip32_make_fingerprint (parent_fingerprint, sizeof (parent_fingerprint), key_bin, KEY_SZ);
         }
 
       hmac_ctx = HMAC_CTX_new();
@@ -342,6 +367,7 @@ main (int argc, char ** argv)
           priv_int = BN_new ();
           CKRC( BN_add (key_int, key_int, offset) );
           CKRC( BN_mod (priv_int, key_int, n, ctx) );
+          // keeps Q_point(bin) to that point 
           K_len = BN_bn2bin (priv_int, K_priv + 1);
           BN_free (priv_int);
           BN_CTX_free (ctx);
@@ -391,7 +417,7 @@ main (int argc, char ** argv)
               OPENSSL_free (script);
               fprintf (stdout, "Address: %s\n", addr);
             }
-          else
+          else if (1 == format)
             {
               unsigned int wif_key_len;
               char * wif_key = compress_key (key_bin, &wif_key_len);
@@ -405,6 +431,29 @@ main (int argc, char ** argv)
                   fprintf (stdout, ": BIP-84 WIF key 0, for first receiving address = m/84'/0'/0'/0/0\n");
                 }
               free (wif_key);
+            }
+          else /* xpriv */
+            {
+              unsigned char xkey[82];
+              unsigned char tag[] = {0x04, 0xb2, 0x43, 0x0c};
+              char *s;
+              bool rc;
+              size_t b58_len;
+
+              memcpy (xkey, tag, sizeof (tag));
+              xkey[VERSION_OFFSET] = lvl + 1;
+              memcpy (xkey + FP_OFFSET,    parent_fingerprint, 4);
+              memcpy (xkey + INDEX_OFFSET, (void *)&index, sizeof (uint32_t));
+              memcpy (xkey + CHAIN_OFFSET, chain, CHAIN_SZ);
+              memcpy (xkey + KEY_OFFSET,   key_bin, KEY_SZ);
+              checksum (xkey + ZKEY_SZ, sizeof (uint32_t), xkey, ZKEY_SZ);
+
+              b58_len = sizeof (xkey) * 2;
+              s = malloc (b58_len);
+              rc = b58enc(s, &b58_len, xkey, sizeof (xkey));
+              s[b58_len] = '\0';
+              fprintf (stdout, "Key: %s\n", s);
+              free (s);
             }
 #endif
           OPENSSL_free (hex);
