@@ -234,6 +234,8 @@ bip32_parse_dir (uint32_t *indexes, size_t indexes_len, char * dir_str)
       if (tok[0] != 'm')
         {
           i = atoi (tok);
+          if (tok[strlen(tok)-1] == 'h')
+            i += 0x80000000;
           indexes[lvl] = i;
           lvl ++;
           ASSERT (lvl < indexes_len);
@@ -304,7 +306,9 @@ main (int argc, char ** argv)
       // int_key
       key_int = BN_bin2bn (key_bin, KEY_SZ, 0);
       CK(key_int);
-      if (xpriv)
+      if (xpriv && indexes[lvl] > 0x7fffffff)
+        K_priv = OPENSSL_malloc(KEY_SZ);
+      else if (xpriv)
         {
           Q_point = EC_POINT_new (secp256k1_group);
           CK(Q_point);
